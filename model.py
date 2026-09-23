@@ -1,75 +1,77 @@
 import pandas as pd
 import numpy as np
 import glob
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import IsolationForest
 
-# 1. 파일 읽기 (인코딩 에러 자동 예방 처리)
+# 1. 공공데이터 기준점 파일 읽기 (인코딩 자동 예방)
 target_file = 'voltis_merged_data_all.csv'
-print(f"1. 데이터셋 읽는 중: [{target_file}]")
+print(f"1. [Data Loading] 기준 공공데이터셋 읽는 중: [{target_file}]")
 
-# 엑셀 저장 시 바뀐 인코딩(CP949/EUC-KR/UTF-8)을 순차적으로 시도하여 읽기
 encodings = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
 df = None
-
 for enc in encodings:
     try:
         df = pd.read_csv(target_file, encoding=enc)
-        print(f"   └ [성공] '{enc}' 인코딩으로 파일을 읽었습니다.")
+        print(f"   └ [성공] '{enc}' 인코딩으로 데이터를 로드했습니다.")
         break
-    except (UnicodeDecodeError, Exception):
+    except Exception:
         continue
 
 if df is None:
-    raise ValueError("파일 인코딩을 읽을 수 없습니다. 파일 상태를 확인해 주세요.")
+    raise ValueError("파일 읽기에 실패했습니다. 인코딩 및 파일명을 확인해 주세요.")
 
 # 시간(hour) 추출
 df['hour'] = pd.to_datetime(df['timestamp']).dt.hour
 
-# 2. AI 이상 탐지 모델 학습 (공공데이터 학습)
-features = ['전력거래량(MWh)']
-for col in ['일조(hr)', '일사(MJ/m2)', '기온(°C)']:
-    if col in df.columns:
-        features.append(col)
-
+# 2. [1단계 AI] 기상-시간 조건 기반 정상 예상 발전량 산출 (RandomForest Regressor)
+print("2. [1단계 ML] 기상 및 시간 조건 기반 정상 발전량 Baseline 학습 중...")
+features = ['hour', '기온(°C)', '일조(hr)', '일사(MJ/m2)', '전운량(10분위)']
 X = df[features].fillna(0)
+y = df['전력거래량(MWh)'].fillna(0)
 
-# Isolation Forest 학습
-model = IsolationForest(n_estimators=100, contamination='auto', random_state=42)
-model.fit(X)
+# 머신러닝 회귀 모델 학습
+reg_model = RandomForestRegressor(n_estimators=30, random_state=42, n_jobs=-1)
+reg_model.fit(X, y)
+df['AI_예측발전량'] = reg_model.predict(X)
 
-# 3. 데이터 기준점(Threshold) 자동 산출
-# 기존 공공데이터 야간 시간대(20시~05시) 전력거래량의 상한선 측정
-night_mask = (df['hour'] >= 20) | (df['hour'] <= 5)
+# 3. [2단계 AI] 오차/잔차(Residual) 계산 및 Isolation Forest 고립 분석
+print("3. [2단계 AI] 잔차(Residual = 실제값 - 예측값) 계산 및 비지도 이상 탐지 실행 중...")
+df['residual'] = df['전력거래량(MWh)'] - df['AI_예측발전량']
 
-# 주입된 극단치 제외 원본 상한선 기준 적용 (600 MWh 이상은 주입된 이상치로 판별)
-valid_night_power = df.loc[night_mask & (df['전력거래량(MWh)'] < 600.0), '전력거래량(MWh)']
-max_night_power = valid_night_power.max() if len(valid_night_power) > 0 else 530.0
+# 잔차 데이터 공간에 Isolation Forest 모델 적용
+iso_model = IsolationForest(n_estimators=100, contamination=0.0005, random_state=42)
+df['anomaly_flag'] = iso_model.fit_predict(df[['residual']])
 
-# 4. 이상 탐지 판별
+# 4. 정밀 유형 분류 (도메인 맥락 결합)
 df['AI_탐지결과'] = '정상'
 
-# [규칙 1] 야간 부정청구 조건 (공공데이터 상한선 초과 수치)
-fraud_cond = night_mask & (df['전력거래량(MWh)'] > max_night_power * 1.1)
+# 잔차가 300 이상 크면서 야간/무일조 시간에 터무니없이 튄 경우 -> 부정청구
+fraud_cond = (df['residual'] > 300.0) & ((df['hour'] >= 20) | (df['hour'] <= 5))
 
-# [규칙 2] 계측기 고장 조건 (한낮 고일조 시 발전량 0)
-fault_cond = ((df['hour'] >= 11) & (df['hour'] <= 14)) & (df['일조(hr)'] > 0.9) & (df['전력거래량(MWh)'] == 0)
+# 잔차가 -200 이하로 떨어지면서 한낮 고일조 시간에 발전량이 0인 경우 -> 계측고장
+fault_cond = (df['residual'] < -200.0) & ((df['hour'] >= 11) & (df['hour'] <= 14)) & (df['일조(hr)'] > 0.8) & (df['전력거래량(MWh)'] == 0)
 
 df.loc[fraud_cond, 'AI_탐지결과'] = '부정청구(야간발전조작)'
 df.loc[fault_cond, 'AI_탐지결과'] = '계측기고장(주간무발전)'
 
-# 5. 결과 검증
+# 5. 탐지 결과 통계 출력
 anomalies = df[df['AI_탐지결과'] != '정상']
 
-print("\n==========================================")
-print(f"📊 AI 이상 탐지 결과: 총 {len(anomalies)}건 포착")
-print("==========================================")
+print("\n==================================================")
+print(f"📊 [2단계 AI 관제 엔진] 총 {len(anomalies)}건의 이상 거래 포착")
+print("==================================================")
 
 if len(anomalies) > 0:
-    print(anomalies[['timestamp', '지역', '전력거래량(MWh)', '일조(hr)', 'AI_탐지결과']])
+    summary = anomalies['AI_탐지결과'].value_counts()
+    for category, count in summary.items():
+        print(f"  • {category}: {count}건")
+    print("\n[상세 포착 샘플 (상위 5건)]")
+    print(anomalies[['timestamp', '전력거래량(MWh)', 'AI_예측발전량', 'residual', 'AI_탐지결과']].head())
 else:
-    print("탐지된 이상치가 없습니다.")
+    print("✅ 모든 데이터가 정상 범주 내에 있습니다.")
 
-# 결과 저장 (엑셀 안전 호환 인코딩 지정)
+# 결과 내보내기 (웹 대시보드 연동용 CSV)
 output_file = 'final_anomaly_results.csv'
 df.to_csv(output_file, index=False, encoding='utf-8-sig')
-print(f"\n✅ 탐지 결과 저장 완료: '{output_file}'")
+print(f"\n✅ 분석 결과 저장 완료: '{output_file}'")

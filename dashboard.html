@@ -105,14 +105,15 @@
             <!-- 우측: 개요 차트 -->
             <div class="lg:col-span-8 flex flex-col gap-4">
                 <div class="bg-white p-3.5 rounded-lg border border-slate-200 shadow-sm">
-                    <h2 class="text-xs font-bold text-slate-700 mb-2">지역별 관제 현황</h2>
-                    <div id="regionGrid" class="grid grid-cols-3 sm:grid-cols-6 gap-1.5"></div>
+                    <h2 class="text-xs font-bold text-slate-700 mb-2">지역별 관제 현황 (전국 + 17개 지자체)</h2>
+                    <!-- 🔥 18개 카드가 9열/6열/3열로 깔끔하게 떨어지도록 grid 설정 -->
+                    <div id="regionGrid" class="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-9 gap-1.5"></div>
                 </div>
 
                 <div class="bg-white p-3.5 rounded-lg border border-slate-200 shadow-sm flex-1">
                     <div class="flex justify-between items-center mb-2">
                         <h2 class="text-xs font-bold text-slate-700">AI 모델 성과 및 이상 거래 종합 개요</h2>
-                        <span class="text-[11px] text-slate-400">시즌별 AI 패턴 및 이상치 포인트</span>
+                        <span class="text-[11px] text-slate-400">CSV 업로드 시 월별 추이 시각화</span>
                     </div>
                     <div class="h-56 w-full">
                         <canvas id="overviewChart"></canvas>
@@ -121,8 +122,8 @@
             </div>
         </div>
 
-        <!-- 🔥 하단 차트: 24시간 패턴 통계 차트 (00시~23시 고정) -->
-        <section class="bg-white p-3.5 rounded-lg border border-slate-200 shadow-sm">
+        <!-- 하단 차트: 24시간 패턴 통계 차트 -->
+        <section class="bg-white p-3.5 rounded-lg border border-slate-200 shadow-sm pb-5">
             <div class="flex justify-between items-center mb-2">
                 <h2 class="text-xs font-bold text-slate-700 flex items-center gap-1.5" id="hourlyChartTitle">
                     <i class="fa-solid fa-chart-line text-sky-500"></i> AI 예상치 vs 실제 발전량 / 24시간 평균 패턴 & 잔차 통계
@@ -184,17 +185,34 @@
             });
         })();
 
+        // CSV 파일의 풀네임(경상북도, 경상남도 등)과 지점명(안동, 창원 등) 매칭
         function normalizeRegion(raw, row) {
             const t = String(raw || '').trim();
             const fullText = JSON.stringify(row || {});
-            if (t.includes('순천') || fullText.includes('순천')) return '순천';
-            if (t.includes('목포') || fullText.includes('목포')) return '목포';
-            if (t.includes('서울')) return '서울'; if (t.includes('경기')) return '경기';
-            if (t.includes('강원')) return '강원'; if (t.includes('충북')) return '충북';
-            if (t.includes('충남')) return '충남'; if (t.includes('전북')) return '전북';
-            if (t.includes('전남')) return '순천'; if (t.includes('경북')) return '경북';
-            if (t.includes('경남')) return '경남'; if (t.includes('제주')) return '제주';
-            return '순천';
+
+            if (t.includes('경북') || t.includes('경상북도') || fullText.includes('안동')) return '경북';
+            if (t.includes('경남') || t.includes('경상남도') || fullText.includes('창원')) return '경남';
+            if (t.includes('충북') || t.includes('충청북도') || fullText.includes('청주')) return '충북';
+            if (t.includes('충남') || t.includes('충청남도') || fullText.includes('홍성')) return '충남';
+            if (t.includes('전북') || t.includes('전라북도') || fullText.includes('전주')) return '전북';
+            
+            if (fullText.includes('순천') || t.includes('순천')) return '순천';
+            if (fullText.includes('목포') || t.includes('목포')) return '목포';
+            if (t.includes('전남') || t.includes('전라남도')) return '순천';
+
+            if (t.includes('서울') || fullText.includes('서울')) return '서울';
+            if (t.includes('경기') || fullText.includes('경기')) return '경기';
+            if (t.includes('강원') || fullText.includes('강원')) return '강원';
+            if (t.includes('제주') || fullText.includes('제주')) return '제주';
+            if (t.includes('인천') || fullText.includes('인천')) return '인천';
+            if (t.includes('대전') || fullText.includes('대전')) return '대전';
+            if (t.includes('세종') || fullText.includes('세종')) return '세종';
+            if (t.includes('광주') || fullText.includes('광주')) return '광주';
+            if (t.includes('대구') || fullText.includes('대구')) return '대구';
+            if (t.includes('울산') || fullText.includes('울산')) return '울산';
+            if (t.includes('부산') || fullText.includes('부산')) return '부산';
+
+            return t || '기타';
         }
 
         let parsedDataset = [];
@@ -294,6 +312,7 @@
             if (map) renderMap();
         }
 
+        // 🔥 [수정] slice(0, 12) 삭제하여 전국 + 17개 관제 지역 전체 카드 표출
         function renderRegionGrid() {
             const stats = {};
             Object.keys(regionCoordinates).forEach(r => stats[r] = { n: 0, fraud: 0, fault: 0 });
@@ -321,7 +340,7 @@
                 fault: Object.values(stats).reduce((a, b) => a + b.fault, 0) }]]
                 .concat(Object.entries(stats));
 
-            items.slice(0, 12).forEach(([region, st]) => {
+            items.forEach(([region, st]) => {
                 let color = '#10b981', msg = '정상';
                 if (st.fraud > 0) { color = '#ef4444'; msg = `부정 ${st.fraud}`; }
                 else if (st.fault > 0) { color = '#f59e0b'; msg = `고장 ${st.fault}`; }
@@ -398,6 +417,7 @@
                 });
             }
 
+            renderMonthlyOverviewChart(filtered);
             render24HourPatternChart(filtered);
             if (map) renderMap();
         }
@@ -408,10 +428,7 @@
                 type: 'line',
                 data: {
                     labels: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
-                    datasets: [
-                        { label: '평균 AI 예측 발전량', data: [12, 15, 25, 38, 42, 30, 25, 28, 30, 32, 22, 18], borderColor: '#0284c7', borderWidth: 2, pointRadius: 2.5, pointHoverRadius: 7, hitRadius: 15, fill: false },
-                        { label: '실제 발전 기록량', data: [10, 14, 24, 36, 40, 28, 24, 27, 29, 30, 20, 16], borderColor: '#64748b', borderWidth: 1.5, pointRadius: 2.5, pointHoverRadius: 7, hitRadius: 15 }
-                    ]
+                    datasets: []
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false,
@@ -424,7 +441,6 @@
                 }
             });
 
-            // 하단 차트 생성 부분 (initCharts 내)
             const ctx2 = document.getElementById('anomalyChart').getContext('2d');
             anomalyChart = new Chart(ctx2, {
                 type: 'line',
@@ -433,18 +449,13 @@
                     datasets: []
                 },
                 options: {
-                    responsive: true, 
-                    maintainAspectRatio: false,
+                    responsive: true, maintainAspectRatio: false,
                     interaction: { mode: 'index', intersect: false },
                     plugins: { legend: { labels: { color: '#475569', font: { size: 10 } } } },
                     scales: {
                         x: { 
-                            title: { display: false }, // 👈 '24시간 관제 시간축' 글씨 제거
-                            ticks: { 
-                                color: '#64748b', 
-                                font: { size: 9 },
-                                padding: 8 // 👈 시간 라벨(00:00) 아래 여백을 추가하여 쾌적하게 조정
-                            }, 
+                            title: { display: false }, 
+                            ticks: { color: '#64748b', font: { size: 9 }, padding: 8 }, 
                             grid: { color: '#f1f5f9' } 
                         },
                         y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#f1f5f9' } }
@@ -453,7 +464,49 @@
             });
         }
 
-        // 🔥 하단 차트: 24시간 패턴 통계 계산 함수
+        function renderMonthlyOverviewChart(dataset) {
+            if (!overviewChart) return;
+
+            const monthlyPred = new Array(12).fill(0);
+            const monthlyActual = new Array(12).fill(0);
+            const monthlyCount = new Array(12).fill(0);
+
+            dataset.forEach(d => {
+                const m = d.month - 1;
+                if (m >= 0 && m < 12) {
+                    monthlyPred[m] += d.pred;
+                    monthlyActual[m] += d.actual;
+                    monthlyCount[m]++;
+                }
+            });
+
+            const avgPred = monthlyPred.map((sum, i) => monthlyCount[i] > 0 ? (sum / monthlyCount[i]) : 0);
+            const avgActual = monthlyActual.map((sum, i) => monthlyCount[i] > 0 ? (sum / monthlyCount[i]) : 0);
+
+            overviewChart.data.datasets = [
+                {
+                    label: '평균 AI 예측 발전량',
+                    data: avgPred,
+                    borderColor: '#0284c7',
+                    borderWidth: 2,
+                    pointRadius: 2.5,
+                    pointHoverRadius: 7,
+                    hitRadius: 15,
+                    fill: false
+                },
+                {
+                    label: '실제 발전 기록량',
+                    data: avgActual,
+                    borderColor: '#64748b',
+                    borderWidth: 1.5,
+                    pointRadius: 2.5,
+                    pointHoverRadius: 7,
+                    hitRadius: 15
+                }
+            ];
+            overviewChart.update();
+        }
+
         function render24HourPatternChart(dataset) {
             if (!anomalyChart) return;
 
